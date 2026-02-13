@@ -17,6 +17,10 @@ We need to download model from huggingface or modelscope.
 1. FlashAttention(branch1)
 
 2. PagedAttention(branch2)
+    2.1 KVCache, PD desperate
+    2.2 PagedAttention
 
 3. torch.distributed(branch3)
     like TP, SP, CP(may not), EP(other model)
+
+4. SpecDecoding(branch4)
