@@ -54,57 +54,45 @@ class Qwen3Attention(nn.Module):
 
     def forward(self, positions, hidden_states):
         batch_size, seq_len, hidden_size = hidden_states.shape
-        
-        # 单独进行Q、K、V投影
+
+        # (batch, seq_len, hidden_size) -> (batch, seq_len, dim)
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
-        
-        # 重塑为多头格式
+
+        # (batch, seq_len, dim) -> (batch, seq_len, head_num, head_dim)
         q = q.view(batch_size, seq_len, self.num_heads, self.head_dim)
         k = k.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
         v = v.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
         
-        if not self.qkv_bias:
-            # 修正：RMSNorm在residual为None时返回单个张量
-            q = self.q_norm(q)
-            k = self.k_norm(k)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        q = self.rotary_emb(q, positions)
+        k = self.rotary_emb(k, positions)
         
-        # Get cos and sin once for positions
-        cos, sin = self.rotary_emb.get_cos_sin(positions)
-        # Apply RoPE to q and k separately
-        q = self.rotary_emb(q, cos, sin)
-        k = self.rotary_emb(k, cos, sin)
+        # (batch, seq_len, head_num, head_dim) -> (batch, head_num, seq_len, head_dim)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
         
-        # 重新排列维度以便进行注意力计算
-        q = q.transpose(1, 2)  # (batch_size, num_heads, seq_len, head_dim)
-        k = k.transpose(1, 2)  # (batch_size, num_kv_heads, seq_len, head_dim)
-        v = v.transpose(1, 2)  # (batch_size, num_kv_heads, seq_len, head_dim)
-        
-        # 处理num_kv_heads != num_heads的情况
+        # GQA -- softmax(mask(QK^T))
         if self.num_kv_heads != self.num_heads:
             k = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
             v = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
         
-        # 计算注意力权重
         attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
-        
-        # 添加causal attention mask
         causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attn_weights.device), diagonal=1)
         causal_mask = causal_mask.bool()
-        # 扩展causal_mask以匹配attn_weights的形状
         causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
         attn_weights = attn_weights.masked_fill(causal_mask, float('-inf'))
-        
         attn_weights = F.softmax(attn_weights, dim=-1)
-        
-        # 计算注意力输出
+
         attn_output = torch.matmul(attn_weights, v)
         attn_output = attn_output.transpose(1, 2)  # (batch_size, seq_len, num_heads, head_dim)
         attn_output = attn_output.reshape(batch_size, seq_len, self.q_size)
-        
-        # 输出投影
         output = self.o_proj(attn_output)
+
         return output
 
 
@@ -117,7 +105,6 @@ class Qwen3MLP(nn.Module):
         hidden_act: str,
     ):
         super().__init__()
-        # 使用分离的投影层，与权重文件匹配
         self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
         self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
         self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
