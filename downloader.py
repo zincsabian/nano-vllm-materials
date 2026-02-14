@@ -9,11 +9,11 @@ def download_model(model_name, save_dir=None, revision="master"):
     
     Args:
         model_name: Model name on ModelScope (e.g., "Qwen/Qwen2.5-0.5B-Instruct")
-        save_dir: Directory to save the model (default: ~/huggingface/model_name)
+        save_dir: Directory to save the model (default: ~/huggingface)
         revision: Model revision (default: "master")
     """
     if save_dir is None:
-        save_dir = os.path.expanduser(f"~/huggingface/{model_name}")
+        save_dir = os.path.expanduser("~/huggingface")
     
     print(f"Downloading model: {model_name}")
     print(f"Cache directory: {save_dir}")
