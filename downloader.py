@@ -3,6 +3,28 @@ import argparse
 from modelscope import snapshot_download
 
 
+def verify_model_files(model_dir):
+    """
+    Verify model files in the given directory
+    
+    Args:
+        model_dir: Path to model directory
+    """
+    print("Verifying model files...")
+    files = os.listdir(model_dir)
+    print(f"Files in directory: {len(files)} items")
+    
+    config_files = [f for f in files if f.endswith('.json')]
+    if config_files:
+        print(f"Config files found: {config_files}")
+    else:
+        print("Warning: No config.json file found!")
+    
+    model_files = [f for f in files if f.endswith('.bin') or f.endswith('.safetensors')]
+    if model_files:
+        print(f"Model files found: {len(model_files)} files")
+
+
 def download_model(model_name, save_dir=None, revision="master"):
     """
     Download model from ModelScope
@@ -15,7 +37,7 @@ def download_model(model_name, save_dir=None, revision="master"):
     if save_dir is None:
         save_dir = os.path.expanduser("~/huggingface")
     
-    print(f"Downloading model: {model_name}")
+    print(f"Model: {model_name}")
     print(f"Cache directory: {save_dir}")
     print(f"Revision: {revision}")
     print("-" * 60)
@@ -27,24 +49,10 @@ def download_model(model_name, save_dir=None, revision="master"):
             revision=revision,
             local_files_only=False
         )
-        print(f"\nModel downloaded successfully!")
-        print(f"Model directory: {model_dir}")
-        print(f"Model name: {model_name}")
         
-        print("\nVerifying downloaded files...")
-        files = os.listdir(model_dir)
-        print(f"Files in directory: {len(files)} items")
-        
-        config_files = [f for f in files if f.endswith('.json')]
-        if config_files:
-            print(f"Config files found: {config_files}")
-        else:
-            print("Warning: No config.json file found!")
-        
-        model_files = [f for f in files if f.endswith('.bin') or f.endswith('.safetensors')]
-        if model_files:
-            print(f"Model files found: {len(model_files)} files")
-        
+        print(f"Model available at: {model_dir}")
+        print()
+        verify_model_files(model_dir)
         return model_dir
     except Exception as e:
         print(f"\nError downloading model: {e}")
