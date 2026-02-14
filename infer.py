@@ -70,7 +70,7 @@ def main():
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="cuda", help="Device to use (e.g., 'cuda', 'cuda:0', 'cpu')")
-    parser.add_argument("--model_path", type=str, default=os.path.expanduser("~/huggingface/qwen/Qwen3-0___6B/"), help="Path to pretrained model")
+    parser.add_argument("--model_path", type=str, default=os.path.expanduser("~/huggingface/Qwen/Qwen3-0.6B/"), help="Path to pretrained model")
     args = parser.parse_args()
     
     # Load model
