@@ -36,12 +36,11 @@ class Qwen3Attention(nn.Module):
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim ** -0.5
-        self.qkv_bias = config.qkv_bias
 
-        self.q_proj = nn.Linear(config.hidden_size, self.q_size, bias=config.qkv_bias)
-        self.k_proj = nn.Linear(config.hidden_size, self.kv_size, bias=config.qkv_bias)
-        self.v_proj = nn.Linear(config.hidden_size, self.kv_size, bias=config.qkv_bias)
-        self.o_proj = nn.Linear(self.q_size, config.hidden_size, bias=False)
+        self.q_proj = nn.Linear(config.hidden_size, self.q_size)
+        self.k_proj = nn.Linear(config.hidden_size, self.kv_size)
+        self.v_proj = nn.Linear(config.hidden_size, self.kv_size)
+        self.o_proj = nn.Linear(self.q_size, config.hidden_size)
         
         self.rotary_emb = RoPE(
             self.head_dim,
@@ -49,10 +48,9 @@ class Qwen3Attention(nn.Module):
             base=config.rope_theta,
             rope_scaling=config.rope_scaling
         )
-        
-        if not self.qkv_bias:
-            self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-            self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+
+        self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
     def forward(self, positions, hidden_states):
         batch_size, seq_len, hidden_size = hidden_states.shape
