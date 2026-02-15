@@ -13,23 +13,21 @@ class RoPE(nn.Module):
         inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
         self.register_buffer('inv_freq', inv_freq)
 
+        self.positions = [i for i in range(0, max_position)]
+
     def get_cos_sin(self, positions):
-        # positions shape: (batch_size, seq_len)
         freqs = torch.einsum('bs,j->bsj', positions, self.inv_freq)
         cos = freqs.cos()
         sin = freqs.sin()
-        # Expand dimensions to match (batch_size, seq_len, 1, head_dim/2)
         cos = cos.unsqueeze(2)
         sin = sin.unsqueeze(2)
         return cos, sin
 
-    def forward(self, x, cos, sin):
-        # x shape: (batch_size, seq_len, num_heads, head_dim)
-        # cos, sin shape: (batch_size, seq_len, 1, head_dim/2)
+    def forward(self, x, positions):
+        cos, sin = self.get_cos_sin(positions)
         return self.apply_rotary_emb(x, cos, sin)
 
     def apply_rotary_emb(self, x, cos, sin):
-        # 与nanovllm实现保持一致
         x1, x2 = torch.chunk(x.float(), 2, dim=-1)
         y1 = x1 * cos - x2 * sin
         y2 = x2 * cos + x1 * sin

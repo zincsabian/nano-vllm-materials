@@ -2,6 +2,12 @@ This branch is only for implement a Qwen3 Model.
 
 We need to download model from huggingface or modelscope.
 
+## Startup
+
+1. Download model from huggingface or ModelScope(faster in Chinese Mainland)
+
+2. Modify the default model path in infer.py, or just parse the arguments to infer.py
+
 
 ## What should we do
 
