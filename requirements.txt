@@ -1,0 +1,4 @@
+modelscope==1.34.0
+safetensors==0.7.0
+torch==2.4.0
+transformers==4.57.6
