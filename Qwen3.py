@@ -52,8 +52,12 @@ class Qwen3Attention(nn.Module):
         self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
-    def forward(self, positions, hidden_states):
+    def forward(self, positions, hidden_states, cu_seqlens = None):
         batch_size, seq_len, hidden_size = hidden_states.shape
+
+        assert batch_size == 1, "cu_seqlens must be None or batch_size == 1"
+        if cu_seqlens is None:
+            cu_seqlens = [0]
 
         # (batch, seq_len, hidden_size) -> (batch, seq_len, dim)
         q = self.q_proj(hidden_states)
@@ -80,18 +84,30 @@ class Qwen3Attention(nn.Module):
         if self.num_kv_heads != self.num_heads:
             k = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
             v = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
-        
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
-        causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attn_weights.device), diagonal=1)
-        causal_mask = causal_mask.bool()
-        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
-        attn_weights = attn_weights.masked_fill(causal_mask, float('-inf'))
-        attn_weights = F.softmax(attn_weights, dim=-1)
 
-        attn_output = torch.matmul(attn_weights, v)
-        attn_output = attn_output.transpose(1, 2)  # (batch_size, seq_len, num_heads, head_dim)
-        attn_output = attn_output.reshape(batch_size, seq_len, self.q_size)
-        output = self.o_proj(attn_output)
+        o_chunks = []
+        for i in range(len(cu_seqlens)):
+            st = cu_seqlens[i]
+            ed = cu_seqlens[i + 1] if i + 1 < len(cu_seqlens) else seq_len
+            seg_len = ed - st
+            q_i = q[:,:,st:ed,:]
+            k_i = k[:,:,st:ed,:]
+            v_i = v[:,:,st:ed,:]
+
+            attn = torch.matmul(q_i, k_i.transpose(-2, -1)) * self.scaling
+            casual_mask = torch.triu(torch.ones(seg_len, seg_len, device=attn.device), diagonal=1)
+            casual_mask = casual_mask.bool()
+            casual_mask = casual_mask.unsqueeze(0).unsqueeze(0)
+            attn = attn.masked_fill(casual_mask, float('-inf'))
+            attn = F.softmax(attn, dim=-1)
+
+            attn_output = torch.matmul(attn, v_i)
+            attn_output = attn_output.transpose(1, 2).reshape(batch_size, seg_len, self.q_size)
+
+            o = self.o_proj(attn_output)
+            o_chunks.append(o)
+        
+        output = torch.cat(o_chunks, dim=1)
 
         return output
 
@@ -145,10 +161,10 @@ class Qwen3DecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, positions, hidden_states):
+    def forward(self, positions, hidden_states, cu_seqlens = None):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(positions, hidden_states)
+        hidden_states = self.self_attn(positions, hidden_states, cu_seqlens)
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
@@ -168,10 +184,10 @@ class Qwen3Model(nn.Module):
         self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, input_ids, positions):
+    def forward(self, input_ids, positions, cu_seqlens = None):
         hidden_states = self.embed_tokens(input_ids)
         for layer in self.layers:
-            hidden_states = layer(positions, hidden_states)
+            hidden_states = layer(positions, hidden_states, cu_seqlens)
         hidden_states = self.norm(hidden_states)
         return hidden_states
 
@@ -195,8 +211,9 @@ class Qwen3ForCausalLM(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
+        cu_seqlens = None
     ):
-        return self.model(input_ids, positions)
+        return self.model(input_ids, positions, cu_seqlens)
 
     def compute_logits(
         self,
