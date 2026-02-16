@@ -6,6 +6,20 @@ from sampler import Sampler
 import os
 
 
+def warmup(model, tokenizer, warmup_steps=3, max_length=50):
+    """
+    Warmup function to prepare model for inference
+    """
+    print(f"Warming up model with {warmup_steps} steps...")
+    
+    for step in range(warmup_steps):
+        input_ids = torch.randint(0, len(tokenizer), (1, 10))
+        warmup_prompt = tokenizer.decode(input_ids[0], skip_special_tokens=True)
+        inference(model, tokenizer, warmup_prompt, max_length=max_length, temperature=0.7)
+    
+    print("Warmup completed!")
+
+
 def inference(model, tokenizer, prompt, max_length=50, temperature=0.7):
     """
     Simple inference function for Qwen3 model with metrics
@@ -91,6 +105,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="cuda", help="Device to use (e.g., 'cuda', 'cuda:0', 'cpu')")
     parser.add_argument("--model_path", type=str, default=os.path.expanduser("~/huggingface/Qwen/Qwen3-0.6B/"), help="Path to pretrained model")
+    parser.add_argument("--warmup_steps", type=int, default=3, help="Number of warmup steps before inference")
+    parser.add_argument("--no_warmup", action="store_true", help="Disable warmup")
     args = parser.parse_args()
     
     # Load model
@@ -106,6 +122,10 @@ def main():
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     print(f"Tokenizer loaded successfully! Vocab size: {tokenizer.vocab_size}, Len: {len(tokenizer)}")
+    
+    # Warmup
+    if not args.no_warmup:
+        warmup(model, tokenizer, warmup_steps=args.warmup_steps)
     
     # Test cases
     test_cases = [
