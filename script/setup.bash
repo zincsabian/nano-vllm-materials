@@ -26,8 +26,8 @@ function nsys_profile() {
     echo "============================================================"
 
     nsys profile \
-        --delay 15 \
-        --duration 300 \
+        --delay 2 \
+        --duration 120 \
         --output "$profile_file" \
         --trace cuda,nvtx,osrt \
         --cuda-memory-usage true \
