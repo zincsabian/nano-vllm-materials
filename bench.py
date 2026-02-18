@@ -55,7 +55,7 @@ def inference(model, tokenizer, prompts, max_length=50, temperature=0.7):
     generated_tokens = [0] * batch_size
 
     step = 0
-    while not all(finished) and step < max_length:
+    while not all(finished):
         cu_seqs, cu_seqlens, cu_positions = preprocess(model, tokenizer, prompts)
         hidden_states = model(cu_seqs, cu_positions, cu_seqlens)
         logits = model.compute_logits(hidden_states)
@@ -70,10 +70,12 @@ def inference(model, tokenizer, prompts, max_length=50, temperature=0.7):
                 out = tokenizer.decode(next_token[j], skip_special_tokens=False)
                 prompts[j] += out
                 generated_tokens[j] += 1
-                
-                if next_token[j] == eos_token_id or generated_tokens[j] >= max_length:
+
+                if next_token[j] == eos_token_id:
                     finished[j] = True
-        
+
+                assert generated_tokens[j] <= max_length, f"{j}, {prompts[j]}"
+
         step += 1
     
     for prompt in prompts:
