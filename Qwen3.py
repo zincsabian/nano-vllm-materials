@@ -87,7 +87,8 @@ class Qwen3Attention(nn.Module):
             k = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
             v = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
 
-        if self.use_cuda_parallel:
+        # 当 cu_seqlens 不为 None 且不是默认的 [0] 时，强制使用 CUDA 并行实现
+        if len(cu_seqlens) > 1 or self.use_cuda_parallel:
             output = self._forward_cuda_parallel(q, k, v, cu_seqlens, batch_size, seq_len)
         else:
             output = self._forward_baseline(q, k, v, cu_seqlens, batch_size, seq_len)
@@ -121,19 +122,16 @@ class Qwen3Attention(nn.Module):
         return output
 
     def _forward_cuda_parallel(self, q, k, v, cu_seqlens, batch_size, seq_len):
-        # Compute attention scores
-        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
-        
-        # Create a combined mask for both causal and segment boundaries
-        mask = torch.zeros(seq_len, seq_len, device=attn.device, dtype=torch.bool)
+        # Create a combined mask for both causal and segment boundaries first
+        mask = torch.zeros(seq_len, seq_len, device=q.device, dtype=torch.bool)
         
         if len(cu_seqlens) == 1:
             # No segments, just causal mask
-            casual_mask = torch.triu(torch.ones(seq_len, seq_len, device=attn.device), diagonal=1)
+            casual_mask = torch.triu(torch.ones(seq_len, seq_len, device=q.device), diagonal=1)
             mask = casual_mask.bool()
         else:
             # Create segment mask first: block attention between different segments
-            segment_ids = torch.zeros(seq_len, device=attn.device, dtype=torch.long)
+            segment_ids = torch.zeros(seq_len, device=q.device, dtype=torch.long)
             for i in range(len(cu_seqlens)):
                 st = cu_seqlens[i]
                 ed = cu_seqlens[i + 1] if i + 1 < len(cu_seqlens) else seq_len
@@ -143,12 +141,15 @@ class Qwen3Attention(nn.Module):
             segment_mask = segment_ids.unsqueeze(0) != segment_ids.unsqueeze(1)
             
             # Create causal mask
-            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attn.device), diagonal=1).bool()
+            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=q.device), diagonal=1).bool()
             
             # Combine masks
             mask = causal_mask | segment_mask
         
-        # Apply mask
+        # Compute attention scores
+        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
+        
+        # Apply mask immediately after computing attention scores
         mask = mask.unsqueeze(0).unsqueeze(0)
         attn = attn.masked_fill(mask, float('-inf'))
         
