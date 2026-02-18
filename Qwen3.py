@@ -27,7 +27,8 @@ class Qwen3Attention(nn.Module):
 
     def __init__(
         self,
-        config
+        config,
+        use_cuda_parallel: bool = False
     ):
         super().__init__()
         self.num_heads = config.num_heads
@@ -36,6 +37,7 @@ class Qwen3Attention(nn.Module):
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim ** -0.5
+        self.use_cuda_parallel = use_cuda_parallel
 
         self.q_proj = nn.Linear(config.hidden_size, self.q_size)
         self.k_proj = nn.Linear(config.hidden_size, self.kv_size)
@@ -85,6 +87,14 @@ class Qwen3Attention(nn.Module):
             k = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
             v = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
 
+        if self.use_cuda_parallel:
+            output = self._forward_cuda_parallel(q, k, v, cu_seqlens, batch_size, seq_len)
+        else:
+            output = self._forward_baseline(q, k, v, cu_seqlens, batch_size, seq_len)
+
+        return output
+
+    def _forward_baseline(self, q, k, v, cu_seqlens, batch_size, seq_len):
         o_chunks = []
         for i in range(len(cu_seqlens)):
             st = cu_seqlens[i]
@@ -108,7 +118,50 @@ class Qwen3Attention(nn.Module):
             o_chunks.append(o)
         
         output = torch.cat(o_chunks, dim=1)
+        return output
 
+    def _forward_cuda_parallel(self, q, k, v, cu_seqlens, batch_size, seq_len):
+        # Compute attention scores
+        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scaling
+        
+        # Create a combined mask for both causal and segment boundaries
+        mask = torch.zeros(seq_len, seq_len, device=attn.device, dtype=torch.bool)
+        
+        if len(cu_seqlens) == 1:
+            # No segments, just causal mask
+            casual_mask = torch.triu(torch.ones(seq_len, seq_len, device=attn.device), diagonal=1)
+            mask = casual_mask.bool()
+        else:
+            # Create segment mask first: block attention between different segments
+            segment_ids = torch.zeros(seq_len, device=attn.device, dtype=torch.long)
+            for i in range(len(cu_seqlens)):
+                st = cu_seqlens[i]
+                ed = cu_seqlens[i + 1] if i + 1 < len(cu_seqlens) else seq_len
+                segment_ids[st:ed] = i
+            
+            # Block positions where segment_ids differ
+            segment_mask = segment_ids.unsqueeze(0) != segment_ids.unsqueeze(1)
+            
+            # Create causal mask
+            causal_mask = torch.triu(torch.ones(seq_len, seq_len, device=attn.device), diagonal=1).bool()
+            
+            # Combine masks
+            mask = causal_mask | segment_mask
+        
+        # Apply mask
+        mask = mask.unsqueeze(0).unsqueeze(0)
+        attn = attn.masked_fill(mask, float('-inf'))
+        
+        # Apply softmax
+        attn = F.softmax(attn, dim=-1)
+        
+        # Compute attention output
+        attn_output = torch.matmul(attn, v)
+        attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_len, self.q_size)
+        
+        # Apply o_proj
+        output = self.o_proj(attn_output)
+        
         return output
 
 
@@ -139,6 +192,7 @@ class Qwen3DecoderLayer(nn.Module):
     def __init__(
         self,
         config: Qwen3Config,
+        use_cuda_parallel: bool = False
     ):    
         super().__init__()
         attention_config = Qwen3AttentionConfig(
@@ -152,7 +206,7 @@ class Qwen3DecoderLayer(nn.Module):
             rope_theta=getattr(config, "rope_theta", 1000000),
             rope_scaling=getattr(config, "rope_scaling", None)
         )
-        self.self_attn = Qwen3Attention(attention_config)
+        self.self_attn = Qwen3Attention(attention_config, use_cuda_parallel=use_cuda_parallel)
         self.mlp = Qwen3MLP(
             hidden_size=config.hidden_size,
             intermediate_size=config.intermediate_size,
@@ -178,10 +232,11 @@ class Qwen3Model(nn.Module):
     def __init__(
         self,
         config: Qwen3Config,
+        use_cuda_parallel: bool = False
     ):    
         super().__init__()
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([Qwen3DecoderLayer(config, use_cuda_parallel=use_cuda_parallel) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(self, input_ids, positions, cu_seqlens = None):
@@ -199,10 +254,11 @@ class Qwen3ForCausalLM(nn.Module):
 
     def __init__(
         self,
-        config: Qwen3Config
+        config: Qwen3Config,
+        use_cuda_parallel: bool = False
     ):
         super().__init__()
-        self.model = Qwen3Model(config)
+        self.model = Qwen3Model(config, use_cuda_parallel=use_cuda_parallel)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         if config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
@@ -222,13 +278,13 @@ class Qwen3ForCausalLM(nn.Module):
         return self.lm_head(hidden_states)
     
     @classmethod
-    def from_pretrained(cls, pretrained_model_path):
+    def from_pretrained(cls, pretrained_model_path, use_cuda_parallel: bool = False):
         """
         Load model from pretrained path
         """
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(pretrained_model_path)
-        model = cls(config)
+        model = cls(config, use_cuda_parallel=use_cuda_parallel)
         
         # 加载权重
         from glob import glob
