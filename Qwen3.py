@@ -52,12 +52,10 @@ class Qwen3Attention(nn.Module):
         self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
-    def forward(self, positions, hidden_states, cu_seqlens = None):
+    def forward(self, positions, hidden_states, cu_seqlens):
         batch_size, seq_len, hidden_size = hidden_states.shape
 
-        assert batch_size == 1, "cu_seqlens must be None or batch_size == 1"
-        if cu_seqlens is None:
-            cu_seqlens = [0]
+        assert batch_size == 1, "batch_size should be 1 while get batch_size = {batch_size}"
 
         # (batch, seq_len, hidden_size) -> (batch, seq_len, dim)
         q = self.q_proj(hidden_states)
@@ -85,19 +83,23 @@ class Qwen3Attention(nn.Module):
             k = k.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
             v = v.repeat_interleave(self.num_heads // self.num_kv_heads, dim=1)
 
-        output = self._forward_baseline(q, k, v, cu_seqlens, batch_size, seq_len)
+        output = self._forward_baseline(q, k, v, cu_seqlens)
 
         return output
 
-    def _forward_baseline(self, q, k, v, cu_seqlens, batch_size, seq_len):
+    def _forward_baseline(self, q, k, v, cu_seqlens):
         o_chunks = []
-        for i in range(len(cu_seqlens)):
+        for i in range(len(cu_seqlens) - 1):
             st = cu_seqlens[i]
-            ed = cu_seqlens[i + 1] if i + 1 < len(cu_seqlens) else seq_len
+            ed = cu_seqlens[i + 1]
             seg_len = ed - st
+
+            print(f"Process {i}-th prompt: ({st}, {ed})")
+
             q_i = q[:,:,st:ed,:]
             k_i = k[:,:,st:ed,:]
             v_i = v[:,:,st:ed,:]
+            print(f"q: {q_i.shape}, k: {k_i.shape}, v: {v_i.shape}")
 
             attn = torch.matmul(q_i, k_i.transpose(-2, -1)) * self.scaling
             casual_mask = torch.triu(torch.ones(seg_len, seg_len, device=attn.device), diagonal=1)
@@ -107,7 +109,7 @@ class Qwen3Attention(nn.Module):
             attn = F.softmax(attn, dim=-1)
 
             attn_output = torch.matmul(attn, v_i)
-            attn_output = attn_output.transpose(1, 2).reshape(batch_size, seg_len, self.q_size)
+            attn_output = attn_output.transpose(1, 2).reshape(1, seg_len, self.q_size)
 
             o = self.o_proj(attn_output)
             o_chunks.append(o)
@@ -165,7 +167,7 @@ class Qwen3DecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, positions, hidden_states, cu_seqlens = None):
+    def forward(self, positions, hidden_states, cu_seqlens):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(positions, hidden_states, cu_seqlens)
@@ -188,10 +190,14 @@ class Qwen3Model(nn.Module):
         self.layers = nn.ModuleList([Qwen3DecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, input_ids, positions, cu_seqlens = None):
+    def forward(self, input_ids, positions, cu_seqlens):
         hidden_states = self.embed_tokens(input_ids)
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
+            # print(f"Layer: {i}")
+            # print(f"Input shapes: inp -- {hidden_states.shape}, positions -- {positions.shape}, cu_seqlens -- {cu_seqlens.shape}")
             hidden_states = layer(positions, hidden_states, cu_seqlens)
+
+        # print(f"Output shapes: inp -- {hidden_states.shape}, positions -- {positions.shape}, cu_seqlens -- {hidden_states.shape}")
         hidden_states = self.norm(hidden_states)
         return hidden_states
 
@@ -215,7 +221,7 @@ class Qwen3ForCausalLM(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        cu_seqlens = None
+        cu_seqlens
     ):
         return self.model(input_ids, positions, cu_seqlens)
 

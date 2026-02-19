@@ -71,14 +71,15 @@ def inference(model, tokenizer, prompts, max_length=50, temperature=0.7):
                 prompts[j] += out
                 generated_tokens[j] += 1
 
-                if next_token[j] == eos_token_id:
+                if next_token[j] == eos_token_id or generated_tokens[j] > max_length:
                     finished[j] = True
 
-                assert generated_tokens[j] <= max_length, f"{j}, {prompts[j]}"
+                # assert generated_tokens[j] <= max_length, f"{j}, {prompts[j]}"
 
         step += 1
     
-    for prompt in prompts:
+    for i, prompt in enumerate(prompts):
+        print(i, generated_tokens[i])
         print(prompt)
     # print(prompts)
     return prompts
@@ -87,36 +88,18 @@ def main():
     device = torch.device("cuda:1")
     model_path = os.path.expanduser("~/huggingface/Qwen/Qwen3-0.6B/")
     model = Qwen3ForCausalLM.from_pretrained(model_path)
-    model = model.to(device).half()
+    model = model.to(device)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     # warmup(model, tokenizer)
 
     test_cases = [
-        "Hello, how are you?",
+        # "Hello, how are you?",
         "What is the capital of France?",
-        "Tell me a short joke.",
-        "How to make a cup of coffee?"
+        # "Tell me a short joke.",
+        # "How to make a cup of coffee?"
     ]
 
     inference(model, tokenizer, test_cases)
-
-    # for i, prompt in enumerate(test_cases, 1):
-    #     print(f"\n{'-'*60}")
-    #     print(f"Test Case {i}/{len(test_cases)}")
-    #     print(f"Prompt: {prompt}")
-        
-    #     result = inference(model, tokenizer, prompt, max_length=100, temperature=0.7)
-        
-    #     print(f"Output: {result['output']}")
-    #     print(f"TTFT: {result['ttft'] * 1000:.2f} ms")
-    #     print(f"Total time: {result['total_time']:.4f} s")
-    #     print(f"Generated tokens: {result['total_generated']}")
-    #     print(f"Throughput: {result['throughput']:.2f} tokens/s")
-        
-    #     all_metrics.append(result)
-    #     print(f"{'-'*60}")
-        
-
 
 
 if __name__ == "__main__":
